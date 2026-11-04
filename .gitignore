@@ -1,0 +1,7 @@
+node_modules/
+# Real credentials: never committed.
+secrets/
+extension/config.local.json
+dist/
+test-results/
+.DS_Store

@@ -1,0 +1,230 @@
+/*
+ * Onboarding: create one free Khan Academy learner account with email + password,
+ * then prove it exists by asking Khan Academy who is signed in.
+ *
+ * Exported as a function taking a Playwright BrowserContext so the tests can run
+ * the exact same code against local fixture pages.
+ */
+import { randomInt } from 'node:crypto';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const KAX = require('../extension/shared.js');
+export const { maskIdentifier, normalizeText } = KAX;
+
+export const SIGNUP_URL = 'https://www.khanacademy.org/signup';
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** Strong random password: 20 chars, always has lower, upper, digit and symbol. */
+export function generatePassword(length = 20) {
+  const sets = ['abcdefghijkmnopqrstuvwxyz', 'ABCDEFGHJKLMNPQRSTUVWXYZ', '23456789', '!@#%^*-_=+'];
+  const all = sets.join('');
+  const chars = sets.map((s) => s[randomInt(s.length)]);
+  while (chars.length < length) chars.push(all[randomInt(all.length)]);
+  for (let i = chars.length - 1; i > 0; i--) { const j = randomInt(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+  return chars.join('');
+}
+
+export function parseArgs(argv, env = {}) {
+  const opts = { email: env.KA_EMAIL || '', birthYear: 1990, firstName: 'Nucleos', lastName: 'Learner', force: false, timeoutMin: 5 };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const next = () => { const v = argv[++i]; if (v === undefined) throw new Error(a + ' needs a value'); return v; };
+    if (a === '--email') opts.email = next();
+    else if (a === '--birth-year') opts.birthYear = Number(next());
+    else if (a === '--first-name') opts.firstName = next();
+    else if (a === '--last-name') opts.lastName = next();
+    else if (a === '--timeout-min') opts.timeoutMin = Number(next());
+    else if (a === '--force') opts.force = true;
+    else if (a === '--help' || a === '-h') opts.help = true;
+    else throw new Error('unknown argument ' + a);
+  }
+  if (opts.help) return opts;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(opts.email)) throw new Error('pass --email you@example.com (or set KA_EMAIL)');
+  const thisYear = new Date().getFullYear();
+  if (!Number.isInteger(opts.birthYear) || thisYear - opts.birthYear < 18 || opts.birthYear < 1900) {
+    throw new Error('--birth-year must make the learner an adult (18+)');
+  }
+  if (!(opts.timeoutMin > 0)) throw new Error('--timeout-min must be positive');
+  return opts;
+}
+
+/**
+ * The only place the final verdict is decided. "created" requires proof from
+ * Khan Academy itself; an error message means "failed"; anything else is
+ * "unverified", which is reported as such and never rounded up to success.
+ */
+export function decideOutcome({ identity, kaError, timedOut }) {
+  if (identity && identity.status === 'success') return { outcome: 'created', detail: identity.detail };
+  if (identity && identity.status === 'mismatch') return { outcome: 'unverified', detail: identity.detail };
+  if (kaError) return { outcome: 'failed', detail: kaError };
+  if (timedOut) return { outcome: 'unverified', detail: 'timed out before Khan Academy confirmed a signed-in account' + (identity ? ' (last check: ' + identity.detail + ')' : '') };
+  return { outcome: 'unverified', detail: identity ? identity.detail : 'no confirmation from Khan Academy' };
+}
+
+/** Make sure a string we are about to print can't contain the secrets. */
+export function redact(text, secrets) {
+  let out = String(text);
+  for (const s of secrets) if (s) out = out.split(s).join('[redacted]');
+  return out;
+}
+
+// ---- page helpers (run against real pages or fixtures) ----
+
+const EMAIL_SEL = 'input[type="email"], input[name*="email" i], input[autocomplete="email"], input[autocomplete="username"]';
+const PASSWORD_SEL = 'input[type="password"]';
+const FIRST_SEL = 'input[autocomplete="given-name"], input[name*="first" i]';
+const LAST_SEL = 'input[autocomplete="family-name"], input[name*="last" i]';
+const SUBMIT_RE = /^(sign up|create account|create my account|continue|next|submit)$/i;
+const EMAIL_PATH_RE = /(sign up|continue) with email/i;
+const CAPTCHA_SEL = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="challenges.cloudflare.com"], iframe[src*="arkoselabs"], iframe[title*="captcha" i]';
+
+async function fillVisibleEmpty(page, selector, value) {
+  let n = 0;
+  for (const el of await page.locator(selector).all()) {
+    if (await el.isVisible().catch(() => false) && (await el.inputValue().catch(() => 'x')) === '') {
+      await el.fill(value);
+      n++;
+    }
+  }
+  return n;
+}
+
+async function alertTexts(page) {
+  return page.evaluate(() => {
+    const out = [];
+    const nodes = document.querySelectorAll('[role="alert"], [aria-live="assertive"]');
+    nodes.forEach((el) => {
+      if (el.closest('[id^="truste"], [id*="trustarc"]')) return;
+      if (el.getClientRects().length === 0) return;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t && !out.includes(t)) out.push(t);
+    });
+    document.querySelectorAll('input[aria-invalid="true"]').forEach((input) => {
+      (input.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean).forEach((id) => {
+        const el = document.getElementById(id);
+        const t = el && (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t && !out.includes(t)) out.push(t);
+      });
+    });
+    return out;
+  });
+}
+
+/** Pick an option in a Wonder Blocks style combobox (button[role=combobox] + listbox). */
+async function pickFromCombobox(page, testId, label) {
+  const box = page.locator(`[data-testid="${testId}"]`);
+  if (!(await box.count())) return false;
+  await box.click();
+  const opt = page.getByRole('option', { name: label, exact: true }).first();
+  await opt.waitFor({ state: 'visible', timeout: 5000 });
+  await opt.click();
+  return true;
+}
+
+/**
+ * Ask Khan Academy who this browser context is signed in as. Uses the context's
+ * own cookie jar (context.request shares it) and the extension's fetchIdentity,
+ * so the script and the extension apply the identical rule.
+ */
+export async function checkIdentity(context, email) {
+  const cookies = await context.cookies(KAX.PROFILE_URL);
+  const cookieString = cookies.map((c) => c.name + '=' + c.value).join('; ');
+  const fetchImpl = async (url, init) => {
+    const r = await context.request.post(url, { headers: init.headers, data: init.body, failOnStatusCode: false });
+    return { ok: r.ok(), status: r.status(), json: () => r.json() };
+  };
+  return KAX.fetchIdentity(fetchImpl, cookieString, email);
+}
+
+/**
+ * Drive the sign-up flow. Returns { outcome: 'created'|'failed'|'unverified', detail, kaid? }.
+ * `say` receives progress lines; it is never given the password or the full email.
+ */
+export async function runOnboarding({ context, email, password, birthYear, firstName, lastName, timeoutMs, say = () => {}, pollMs = 1000, identityCheck = checkIdentity }) {
+  const secrets = [email, password];
+  const print = (m) => say(redact(m, secrets));
+  const page = await context.newPage();
+  const deadline = Date.now() + timeoutMs;
+
+  print('Opening Khan Academy sign-up…');
+  await page.goto(SIGNUP_URL, { waitUntil: 'domcontentloaded' });
+
+  // Step 1: "Student – learning on my own" (the adult learner path).
+  const student = page.locator('a[href*="/signup/learner"]').first();
+  await student.waitFor({ state: 'visible', timeout: 30000 });
+  await student.click();
+
+  // Step 2: date of birth, as an adult.
+  await page.locator('[data-testid="birthday-picker-month"]').waitFor({ state: 'visible', timeout: 30000 });
+  await pickFromCombobox(page, 'birthday-picker-month', MONTHS[0]);
+  await pickFromCombobox(page, 'birthday-picker-year', String(birthYear));
+  await page.getByRole('button', { name: /^next$/i }).click();
+  print('Entered an adult date of birth.');
+
+  // Step 3+: whatever Khan Academy asks for next. We fill what we recognise,
+  // press its primary button once per distinct step, and let the user finish
+  // anything we don't recognise (CAPTCHA, unexpected prompt) in the window.
+  const clicked = new Set();
+  let submitted = false;
+  let identity = null;
+  let kaError = null;
+  let baseline = await alertTexts(page);
+  let announcedCaptcha = false;
+  let announcedManual = false;
+  const startedAt = Date.now();
+
+  while (Date.now() < deadline) {
+    if (!page.isClosed()) {
+      const stepKey = page.url().split('?')[0];
+
+      if (await page.locator(CAPTCHA_SEL).first().isVisible().catch(() => false)) {
+        if (!announcedCaptcha) { print('A CAPTCHA is showing. Solve it in the browser window; this script will not bypass it.'); announcedCaptcha = true; }
+      } else {
+        const choice = page.getByRole('button', { name: EMAIL_PATH_RE }).or(page.getByRole('link', { name: EMAIL_PATH_RE })).first();
+        if (await choice.isVisible().catch(() => false) && !clicked.has(stepKey + '#email-path')) {
+          clicked.add(stepKey + '#email-path');
+          await choice.click();
+        }
+        const filled = (await fillVisibleEmpty(page, FIRST_SEL, firstName)) + (await fillVisibleEmpty(page, LAST_SEL, lastName)) +
+          (await fillVisibleEmpty(page, EMAIL_SEL, email)) + (await fillVisibleEmpty(page, PASSWORD_SEL, password));
+        if (filled) print('Filled the sign-up form.');
+
+        const hasPassword = await page.locator(PASSWORD_SEL).first().isVisible().catch(() => false);
+        const btn = page.getByRole('button', { name: SUBMIT_RE }).first();
+        if (hasPassword && !clicked.has(stepKey + '#submit') && await btn.isVisible().catch(() => false) &&
+            await btn.isEnabled().catch(() => false) && (await btn.getAttribute('aria-disabled')) !== 'true') {
+          clicked.add(stepKey + '#submit');
+          baseline = await alertTexts(page);
+          await btn.click();
+          submitted = true;
+          print('Submitted the sign-up form. Waiting for Khan Academy to confirm…');
+        }
+      }
+
+      if (submitted) {
+        const fresh = (await alertTexts(page).catch(() => [])).filter((t) => !baseline.includes(t));
+        if (fresh.length) { kaError = fresh.join(' | '); break; }
+      }
+    }
+
+    // Proof, not a URL guess: does Khan Academy say this browser is signed in as `email`?
+    if (submitted || Date.now() - startedAt > 15000) {
+      identity = await identityCheck(context, email).catch((e) => ({ status: 'unverifiable', detail: String(e.message) }));
+      if (identity.status === 'success' || identity.status === 'mismatch') break;
+    }
+
+    if (!announcedManual && Date.now() - startedAt > 30000) {
+      print('Still waiting. If the browser shows a step this script did not complete, finish it there; the script keeps checking.');
+      announcedManual = true;
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+
+  // An error on screen does not prove the account is missing; check once more.
+  if (!identity || (identity.status !== 'success' && identity.status !== 'mismatch')) {
+    identity = await identityCheck(context, email).catch((e) => ({ status: 'unverifiable', detail: String(e.message) }));
+  }
+  const result = decideOutcome({ identity, kaError, timedOut: !kaError && Date.now() >= deadline });
+  return { ...result, detail: redact(result.detail, secrets), kaid: identity && identity.kaid };
+}

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Khan Academy Auto Sign-in (Nucleos take-home)",
+  "version": "1.0.0",
+  "description": "Signs in to Khan Academy with configured credentials and reports the real outcome.",
+  "permissions": ["storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://accounts.khanacademy.org/login*",
+        "https://www.khanacademy.org/login*"
+      ],
+      "js": ["shared.js", "toast.js", "login.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.khanacademy.org/*"],
+      "exclude_matches": ["https://www.khanacademy.org/login*"],
+      "js": ["shared.js", "toast.js", "landing.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
