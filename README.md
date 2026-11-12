@@ -5,7 +5,7 @@ Two pieces, both built so they only claim a result they can prove:
 1. **`onboarding/`**: a Node + Playwright script that walks Khan Academy's adult-learner sign-up in a visible browser, then checks with Khan Academy's API that the new account exists before saying so.
 2. **`extension/`**: a Manifest V3 Chrome extension. When you open the Khan Academy login page it fills the form once and submits it. If Khan Academy shows an error, the extension puts that exact text in a toast. If the login works, it confirms with Khan Academy who is signed in before showing a success toast.
 
-**Recording (≤ 4 min):** _ADD LINK_ (onboarding run, then the wrong-credentials run with the error toast, then the corrected run with the success toast)
+**Recording (≤ 4 min):** [Watch the demo on Google Drive](https://drive.google.com/file/d/1-Ry8E9-tLEfJIWGyQpBVFWeM9CSJ3M9Z/view?usp=drive_link). It shows the onboarding run, then the wrong-credentials run with the error toast, then the corrected run with the success toast.
 
 Download page: https://nucleos.mattdevoss.dev (extension zip + source zip)
 
