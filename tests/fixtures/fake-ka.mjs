@@ -8,6 +8,7 @@
  * extension reads whatever Khan Academy renders.
  */
 export const FIXTURE_LOGIN_ERROR = 'FIXTURE: Your email/username or password is incorrect.';
+export const FIXTURE_TERMS_ERROR = 'FIXTURE: You must agree to the terms to proceed.';
 export const FIXTURE_TAKEN_ERROR = 'FIXTURE: An account with this email already exists.';
 
 const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
@@ -73,6 +74,9 @@ const EMAIL_PAGE = page('Sign up', `
 <form id="f">
   <input name="firstName" autocomplete="given-name"><input name="lastName" autocomplete="family-name">
   <input type="email" name="email"><input type="password" name="password">
+  <!-- Visually hidden native input with a styled box, like Wonder Blocks. -->
+  <div class="terms"><input type="checkbox" id="tos" name="tos" style="position:absolute;opacity:0;width:1px;height:1px">
+    <span>I agree to the Khan Academy <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a></span></div>
   <button type="submit">Sign up</button>
 </form>
 <script>
@@ -116,7 +120,8 @@ export function createFakeKA({ accounts = {} } = {}) {
     }
     if (u.pathname === '/fixture/signup' && method === 'POST') {
       state.signupPosts++;
-      const { email, password } = JSON.parse(body || '{}');
+      const { email, password, tos } = JSON.parse(body || '{}');
+      if (tos !== 'on') return json({ ok: false, error: FIXTURE_TERMS_ERROR });
       if (state.accounts[email]) return json({ ok: false, error: FIXTURE_TAKEN_ERROR });
       state.accounts[email] = password;
       state.session = email;

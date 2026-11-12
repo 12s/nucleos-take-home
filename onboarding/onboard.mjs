@@ -16,7 +16,7 @@ import { parseArgs, generatePassword, runOnboarding, maskIdentifier } from './li
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ACCOUNT_FILE = join(ROOT, 'secrets', 'ka-account.json');
 
-const USAGE = `Usage: npm run onboard -- --email you@example.com [--birth-year 2000] [--first-name X] [--last-name Y] [--timeout-min 5] [--force]
+const USAGE = `Usage: npm run onboard -- --email you@example.com [--birth-year 2000] [--first-name X] [--last-name Y] [--timeout-min 5] [--agree-terms] [--force]
   KA_EMAIL / KA_PASSWORD env vars may be used instead of --email / a generated password.`;
 
 async function main() {
@@ -39,7 +39,7 @@ async function main() {
   let result;
   try {
     result = await runOnboarding({
-      context, email: opts.email, password, birthYear: opts.birthYear, firstName: opts.firstName, lastName: opts.lastName,
+      context, email: opts.email, password, birthYear: opts.birthYear, firstName: opts.firstName, lastName: opts.lastName, agreeTerms: opts.agreeTerms,
       timeoutMs: opts.timeoutMin * 60000, say: (m) => console.log('  ' + m),
     });
   } catch (e) {

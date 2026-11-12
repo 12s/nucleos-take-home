@@ -27,7 +27,7 @@ export function generatePassword(length = 20) {
 }
 
 export function parseArgs(argv, env = {}) {
-  const opts = { email: env.KA_EMAIL || '', birthYear: 2000, firstName: 'Nucleos', lastName: 'Learner', force: false, timeoutMin: 5 };
+  const opts = { email: env.KA_EMAIL || '', birthYear: 2000, firstName: 'Nucleos', lastName: 'Learner', force: false, agreeTerms: false, timeoutMin: 5 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { const v = argv[++i]; if (v === undefined) throw new Error(a + ' needs a value'); return v; };
@@ -37,6 +37,7 @@ export function parseArgs(argv, env = {}) {
     else if (a === '--last-name') opts.lastName = next();
     else if (a === '--timeout-min') opts.timeoutMin = Number(next());
     else if (a === '--force') opts.force = true;
+    else if (a === '--agree-terms') opts.agreeTerms = true;
     else if (a === '--help' || a === '-h') opts.help = true;
     else throw new Error('unknown argument ' + a);
   }
@@ -112,6 +113,42 @@ async function alertTexts(page) {
   });
 }
 
+/**
+ * Mark (data-kax-terms) every visible, unchecked checkbox whose label talks about
+ * agreeing to terms, and return how many there are. Covers <label for>, a wrapping
+ * <label>, aria-label(ledby), and plain text next to the box.
+ */
+async function markUncheckedTerms(page) {
+  return page.evaluate(() => {
+    const RE = /terms|agree|privacy policy/i;
+    let n = 0;
+    document.querySelectorAll('input[type="checkbox"], [role="checkbox"]').forEach((box) => {
+      box.removeAttribute('data-kax-terms');
+      const checked = box.matches('input') ? box.checked : box.getAttribute('aria-checked') === 'true';
+      if (checked) return;
+      const texts = [box.getAttribute('aria-label') || ''];
+      (box.getAttribute('aria-labelledby') || '').split(/\s+/).forEach((id) => { const el = id && document.getElementById(id); if (el) texts.push(el.textContent); });
+      if (box.id) document.querySelectorAll(`label[for="${CSS.escape(box.id)}"]`).forEach((l) => texts.push(l.textContent));
+      if (box.closest('label')) texts.push(box.closest('label').textContent);
+      let el = box.parentElement;
+      for (let i = 0; el && i < 3; i++, el = el.parentElement) texts.push(el.textContent);
+      if (!RE.test(texts.join(' '))) return;
+      // A visually hidden native input still counts if its styled wrapper is visible.
+      const shown = box.getClientRects().length || (box.parentElement && box.parentElement.getClientRects().length);
+      if (!shown) return;
+      box.setAttribute('data-kax-terms', '');
+      n++;
+    });
+    return n;
+  });
+}
+
+async function tickMarkedTerms(page) {
+  for (const box of await page.locator('[data-kax-terms]').all()) {
+    try { await box.check({ timeout: 3000 }); } catch { await box.check({ force: true }); }
+  }
+}
+
 /** Pick an option in a Wonder Blocks style combobox (button[role=combobox] + listbox). */
 async function pickFromCombobox(page, testId, name) {
   const box = page.locator(`[data-testid="${testId}"]`);
@@ -144,7 +181,7 @@ export async function checkIdentity(context, email) {
  * Drive the sign-up flow. Returns { outcome: 'created'|'failed'|'unverified', detail, kaid? }.
  * `say` receives progress lines; it is never given the password or the full email.
  */
-export async function runOnboarding({ context, email, password, birthYear, firstName, lastName, timeoutMs, say = () => {}, pollMs = 1000, identityCheck = checkIdentity }) {
+export async function runOnboarding({ context, email, password, birthYear, firstName, lastName, timeoutMs, agreeTerms = false, say = () => {}, pollMs = 1000, identityCheck = checkIdentity }) {
   const secrets = [email, password];
   const print = (m) => say(redact(m, secrets));
   const page = await context.newPage();
@@ -181,6 +218,7 @@ export async function runOnboarding({ context, email, password, birthYear, first
   let baseline = await alertTexts(page);
   let announcedCaptcha = false;
   let announcedManual = false;
+  let announcedTerms = false;
   const startedAt = Date.now();
 
   while (Date.now() < deadline) {
@@ -199,9 +237,21 @@ export async function runOnboarding({ context, email, password, birthYear, first
           (await fillVisibleEmpty(page, EMAIL_SEL, email)) + (await fillVisibleEmpty(page, PASSWORD_SEL, password));
         if (filled) print('Filled the sign-up form.');
 
+        // Agreeing to Khan Academy's terms is the user's decision: only tick the box
+        // when they passed --agree-terms; otherwise wait for them to tick it.
+        let termsPending = (await markUncheckedTerms(page).catch(() => 0)) > 0;
+        if (termsPending && agreeTerms) {
+          await tickMarkedTerms(page);
+          print("Ticked Khan Academy's terms checkbox (you passed --agree-terms).");
+          termsPending = (await markUncheckedTerms(page).catch(() => 0)) > 0;
+        } else if (termsPending && !announcedTerms) {
+          print("Khan Academy needs you to agree to its terms. Tick the box in the browser window (or re-run with --agree-terms); the script submits once it's ticked.");
+          announcedTerms = true;
+        }
+
         const hasPassword = await page.locator(PASSWORD_SEL).first().isVisible().catch(() => false);
         const btn = page.getByRole('button', { name: SUBMIT_RE }).first();
-        if (hasPassword && !clicked.has(stepKey + '#submit') && await btn.isVisible().catch(() => false) &&
+        if (hasPassword && !termsPending && !clicked.has(stepKey + '#submit') && await btn.isVisible().catch(() => false) &&
             await btn.isEnabled().catch(() => false) && (await btn.getAttribute('aria-disabled')) !== 'true') {
           clicked.add(stepKey + '#submit');
           baseline = await alertTexts(page);

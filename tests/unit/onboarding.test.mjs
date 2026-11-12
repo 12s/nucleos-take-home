@@ -18,6 +18,8 @@ test('parseArgs: requires an email and an adult birth year', () => {
   assert.throws(() => parseArgs(['--email', 'a@b.co', '--birth-year', String(new Date().getFullYear() - 10)]), /adult/);
   assert.throws(() => parseArgs(['--email', 'a@b.co', '--bogus']), /unknown/);
   assert.equal(parseArgs(['--help']).help, true);
+  assert.equal(parseArgs(['--email', 'a@b.co']).agreeTerms, false, 'terms are never agreed by default');
+  assert.equal(parseArgs(['--email', 'a@b.co', '--agree-terms']).agreeTerms, true);
 });
 
 test('decideOutcome: "created" only with proof from Khan Academy', () => {

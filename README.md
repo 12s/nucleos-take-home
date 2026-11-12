@@ -23,7 +23,7 @@ npm test               # unit + end-to-end tests (offline; see "Tests")
 ### 1. Run the onboarding script
 
 ```bash
-npm run onboard -- --email you+nucleos@example.com
+npm run onboard -- --email you+nucleos@example.com --agree-terms
 ```
 
 | Option | Default | Notes |
@@ -32,6 +32,7 @@ npm run onboard -- --email you+nucleos@example.com
 | `KA_PASSWORD` env | generated | 20 random characters from `crypto.randomInt` unless you set one. |
 | `--birth-year` | `2000` (born January 2000) | Must make the learner 18+ (the brief asks for an adult learner). |
 | `--first-name` / `--last-name` | `Nucleos` / `Learner` | Filled only if Khan Academy asks for them. |
+| `--agree-terms` | off | Ticks Khan Academy's "I agree to the Terms of Service" box for you. Without it, the script waits for you to tick the box in the window, and it never submits until the box is ticked. Agreeing to the terms is your decision, so the script doesn't make it by default. |
 | `--timeout-min` | `5` | How long to wait for proof. |
 | `--force` | off | Allows a second sign-up after one was already verified. Use it only if the first account is gone. |
 
