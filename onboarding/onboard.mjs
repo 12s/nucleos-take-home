@@ -48,10 +48,17 @@ async function main() {
     await browser.close();
   }
 
-  if (result.outcome === 'created') {
+  // Keep the credentials whenever the account might exist, so an unconfirmed run
+  // doesn't leave an account nobody knows the password to. `verified` records
+  // whether Khan Academy proved it.
+  const save = (verified) => {
     mkdirSync(dirname(ACCOUNT_FILE), { recursive: true });
-    writeFileSync(ACCOUNT_FILE, JSON.stringify({ email: opts.email, password, kaid: result.kaid, verified: true, createdAt: new Date().toISOString() }, null, 2) + '\n', { mode: 0o600 });
+    writeFileSync(ACCOUNT_FILE, JSON.stringify({ email: opts.email, password, kaid: result.kaid || null, verified, createdAt: new Date().toISOString() }, null, 2) + '\n', { mode: 0o600 });
     chmodSync(ACCOUNT_FILE, 0o600);
+  };
+
+  if (result.outcome === 'created') {
+    save(true);
     console.log(`\nACCOUNT CREATED. Verified: Khan Academy reports a signed-in, non-anonymous user with email ${maskIdentifier(opts.email)} (${result.detail}).`);
     console.log('Credentials saved to secrets/ka-account.json (git-ignored). Run `npm run use-account` to give them to the extension.');
     process.exit(0);
@@ -60,7 +67,9 @@ async function main() {
     console.log(`\nACCOUNT NOT CREATED. Khan Academy said: "${result.detail}"`);
     process.exit(1);
   }
-  console.log(`\nACCOUNT CREATION NOT CONFIRMED: ${result.detail}. Not claiming success. Check the email inbox or try signing in before re-running.`);
+  save(false);
+  console.log(`\nACCOUNT CREATION NOT CONFIRMED: ${result.detail}. Not claiming success.`);
+  console.log('The credentials were saved to secrets/ka-account.json (git-ignored, marked unverified) in case the account does exist. Check the inbox or try signing in before re-running.');
   process.exit(2);
 }
 
