@@ -52,9 +52,9 @@ const SIGNUP_PAGE = page('Sign up', `<a href="/signup/learner/birthday">Student 
 const BIRTHDAY_PAGE = page('Sign up', `
 <label>Date of birth</label>
 <button type="button" role="combobox" aria-label="Month" data-testid="birthday-picker-month" aria-controls="m">Month</button>
-<div id="m" role="listbox" hidden>${['January', 'February'].map((m) => `<div role="option">${m}</div>`).join('')}</div>
+<div id="m" role="listbox" hidden>${['Jan', 'Feb', 'Mar'].map((m) => `<div role="option">${m}</div>`).join('')}</div>
 <button type="button" role="combobox" aria-label="Year" data-testid="birthday-picker-year" aria-controls="y">Year</button>
-<div id="y" role="listbox" hidden>${[2015, 1990, 1985].map((y) => `<div role="option">${y}</div>`).join('')}</div>
+<div id="y" role="listbox" hidden>${[2015, 2000, 1990, 1985].map((y) => `<div role="option">${y}</div>`).join('')}</div>
 <button type="button" id="next">Next</button>
 <script>
   for (const box of document.querySelectorAll('[role=combobox]')) {

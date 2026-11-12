@@ -13,7 +13,8 @@ const KAX = require('../extension/shared.js');
 export const { maskIdentifier, normalizeText } = KAX;
 
 export const SIGNUP_URL = 'https://www.khanacademy.org/signup';
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+// Khan Academy's month picker shows "Jan", "Feb", …; accept the full name too.
+const JANUARY = /^jan(uary)?\.?$/i;
 
 /** Strong random password: 20 chars, always has lower, upper, digit and symbol. */
 export function generatePassword(length = 20) {
@@ -26,7 +27,7 @@ export function generatePassword(length = 20) {
 }
 
 export function parseArgs(argv, env = {}) {
-  const opts = { email: env.KA_EMAIL || '', birthYear: 1990, firstName: 'Nucleos', lastName: 'Learner', force: false, timeoutMin: 5 };
+  const opts = { email: env.KA_EMAIL || '', birthYear: 2000, firstName: 'Nucleos', lastName: 'Learner', force: false, timeoutMin: 5 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { const v = argv[++i]; if (v === undefined) throw new Error(a + ' needs a value'); return v; };
@@ -112,14 +113,16 @@ async function alertTexts(page) {
 }
 
 /** Pick an option in a Wonder Blocks style combobox (button[role=combobox] + listbox). */
-async function pickFromCombobox(page, testId, label) {
+async function pickFromCombobox(page, testId, name) {
   const box = page.locator(`[data-testid="${testId}"]`);
-  if (!(await box.count())) return false;
   await box.click();
-  const opt = page.getByRole('option', { name: label, exact: true }).first();
-  await opt.waitFor({ state: 'visible', timeout: 5000 });
-  await opt.click();
-  return true;
+  const opt = page.getByRole('option', { name, exact: typeof name === 'string' }).first();
+  try {
+    await opt.waitFor({ state: 'visible', timeout: 10000 });
+  } catch {
+    throw new Error(`could not find option ${name} in the ${testId} list`);
+  }
+  await opt.click(); // Playwright scrolls long lists (years) into view first
 }
 
 /**
@@ -157,10 +160,16 @@ export async function runOnboarding({ context, email, password, birthYear, first
 
   // Step 2: date of birth, as an adult.
   await page.locator('[data-testid="birthday-picker-month"]').waitFor({ state: 'visible', timeout: 30000 });
-  await pickFromCombobox(page, 'birthday-picker-month', MONTHS[0]);
+  await pickFromCombobox(page, 'birthday-picker-month', JANUARY);
   await pickFromCombobox(page, 'birthday-picker-year', String(birthYear));
   await page.getByRole('button', { name: /^next$/i }).click();
-  print('Entered an adult date of birth.');
+  try {
+    await page.waitForURL((u) => !/\/signup\/learner\/birthday/.test(u.pathname), { timeout: 15000 });
+  } catch {
+    const msgs = await alertTexts(page);
+    throw new Error('the birthday step did not advance' + (msgs.length ? ': ' + msgs.join(' | ') : ''));
+  }
+  print('Entered date of birth January ' + birthYear + '.');
 
   // Step 3+: whatever Khan Academy asks for next. We fill what we recognise,
   // press its primary button once per distinct step, and let the user finish

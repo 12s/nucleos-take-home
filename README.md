@@ -30,7 +30,7 @@ npm run onboard -- --email you+nucleos@example.com
 | --- | --- | --- |
 | `--email` (or `KA_EMAIL`) | required | Use an inbox you control. A `+tag` alias works well. |
 | `KA_PASSWORD` env | generated | 20 random characters from `crypto.randomInt` unless you set one. |
-| `--birth-year` | `1990` | Must make the learner 18+ (the brief asks for an adult learner). |
+| `--birth-year` | `2000` (born January 2000) | Must make the learner 18+ (the brief asks for an adult learner). |
 | `--first-name` / `--last-name` | `Nucleos` / `Learner` | Filled only if Khan Academy asks for them. |
 | `--timeout-min` | `5` | How long to wait for proof. |
 | `--force` | off | Allows a second sign-up after one was already verified. Use it only if the first account is gone. |

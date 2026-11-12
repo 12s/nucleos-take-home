@@ -136,7 +136,7 @@ test('onboarding script: creates the account and proves it, never prints secrets
     const r = fake.handle(init.method, url, init.body);
     return { ok: r.status === 200, status: r.status, json: async () => JSON.parse(r.body) };
   }, '', email);
-  const result = await runOnboarding({ context, email: 'new@fixture.test', password: 'Gen3rated-Secret!', birthYear: 1990, firstName: 'A', lastName: 'B', timeoutMs: 30000, pollMs: 200, say: (m) => lines.push(m), identityCheck });
+  const result = await runOnboarding({ context, email: 'new@fixture.test', password: 'Gen3rated-Secret!', birthYear: 2000, firstName: 'A', lastName: 'B', timeoutMs: 30000, pollMs: 200, say: (m) => lines.push(m), identityCheck });
   assert.equal(result.outcome, 'created', result.detail);
   assert.equal(result.kaid, 'kaid_fixture123');
   assert.equal(fake.state.signupPosts, 1, 'one account, one submit');
@@ -154,7 +154,7 @@ test('onboarding script: a Khan Academy error is reported as failure, verbatim',
     const r = fake.handle(init.method, url, init.body);
     return { ok: true, status: 200, json: async () => JSON.parse(r.body) };
   }, '', email);
-  const result = await runOnboarding({ context, email: 'taken@fixture.test', password: 'Whatever-1!', birthYear: 1990, firstName: 'A', lastName: 'B', timeoutMs: 30000, pollMs: 200, identityCheck });
+  const result = await runOnboarding({ context, email: 'taken@fixture.test', password: 'Whatever-1!', birthYear: 2000, firstName: 'A', lastName: 'B', timeoutMs: 30000, pollMs: 200, identityCheck });
   assert.equal(result.outcome, 'failed');
   assert.equal(result.detail, FIXTURE_TAKEN_ERROR);
 });
