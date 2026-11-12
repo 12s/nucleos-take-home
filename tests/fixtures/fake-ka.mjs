@@ -46,24 +46,31 @@ const LOGIN_PAGE = page('Log in to Khan Academy | Khan Academy', `
   });
 </script>`);
 
-// Like the live page: labels only (no name/autocomplete attributes), an optional
-// class code, and a button that finishes the profile.
+// Like the live page: the button renders before the name fields (React), the
+// labels are plain text next to the inputs (no for=), the class code is optional,
+// and submitting with empty names shows "required fields" and stays put.
+export const FIXTURE_PROFILE_ERROR = 'FIXTURE: Please fill out all required fields.';
 const PROFILE_PAGE = page('Welcome', `
 <h1>Welcome to Khan Academy for learners!</h1>
-<label for=":r1:">First name <span>required</span></label><input id=":r1:">
-<label for=":r2:">Last name <span>required</span></label><input id=":r2:">
-<label for=":r3:">Have a class code? Join here! (Optional)</label><input id=":r3:" placeholder="Eg. G09WP">
+<div id="fields"></div>
+<div id="profile-error" role="alert"></div>
 <button type="button" id="enter">Enter Khan Academy for learners</button>
 <script>
+  setTimeout(() => {
+    document.getElementById('fields').innerHTML =
+      '<div class="row"><div><div>First name <span>required</span></div><input id="f1" aria-required="true"></div>' +
+      '<div><div>Last name <span>required</span></div><input id="f2" aria-required="true"></div></div>' +
+      '<div><div>Have a class code? Join here! (Optional)</div><input id="f3" placeholder="Eg. G09WP"></div>';
+  }, 500);
   document.getElementById('enter').onclick = async () => {
-    const body = { first: document.getElementById(':r1:').value, last: document.getElementById(':r2:').value, code: document.getElementById(':r3:').value };
+    const v = (id) => (document.getElementById(id) || {}).value || '';
+    const body = { first: v('f1'), last: v('f2'), code: v('f3') };
     const j = await (await fetch('/fixture/profile', { method: 'POST', body: JSON.stringify(body) })).json();
     if (j.ok) location.href = 'https://www.khanacademy.org/';
+    else document.getElementById('profile-error').textContent = j.error;
   };
 </script>`);
 
-// Like the real app, the home page asks for the signed-in user with its own
-// (safelisted, GET + hash) query shortly after loading. Half via fetch, half via XHR.
 const HOME_PAGE = page('Khan Academy', `<main><h1>Fixture home</h1></main>
 <script>
   setTimeout(() => {
@@ -120,6 +127,7 @@ export function createFakeKA({ accounts = {} } = {}) {
     loginPosts: 0,
     signupPosts: 0,
     profile: null,                   // { first, last, code } once the profile step is done
+    failProfileOnce: false,          // reject the first profile submit with a generic error
     forbidAdHocQuery: false,         // answer our own POSTed query with 403, like the live site
     profileResponse: null,           // override getFullUserProfile JSON for a test
     bounceToLogin: false,            // simulate a submit that lands back on /login with no message
@@ -162,7 +170,9 @@ export function createFakeKA({ accounts = {} } = {}) {
     }
     if (u.pathname === '/fixture/profile' && method === 'POST') {
       const p = JSON.parse(body || '{}');
-      if (!p.first || !p.last) return json({ ok: false });
+      state.profileAttempts = (state.profileAttempts || 0) + 1;
+      if (state.failProfileOnce) { state.failProfileOnce = false; return json({ ok: false, error: 'FIXTURE: Something went wrong, try again.' }); }
+      if (!p.first || !p.last) return json({ ok: false, error: FIXTURE_PROFILE_ERROR });
       state.profile = p;
       return json({ ok: true });
     }

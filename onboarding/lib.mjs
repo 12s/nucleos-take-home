@@ -146,6 +146,38 @@ async function markUncheckedTerms(page) {
   });
 }
 
+/**
+ * Tag the visible first/last name inputs with data-kax-field="first"|"last".
+ * Uses the input's own label (for=, wrapping label, aria-labelledby, aria-label)
+ * and, failing that, the nearest ancestor whose text names exactly one of them.
+ */
+async function markNameFields(page) {
+  return page.evaluate(() => {
+    const kinds = { first: /first name|given name/i, last: /last name|family name|surname/i };
+    const which = (text) => {
+      const hits = Object.keys(kinds).filter((k) => kinds[k].test(text || ''));
+      return hits.length === 1 ? hits[0] : null;
+    };
+    const marked = {};
+    document.querySelectorAll('input:not([type]), input[type="text"]').forEach((el) => {
+      el.removeAttribute('data-kax-field');
+      if (!el.getClientRects().length) return;
+      const own = [el.getAttribute('aria-label') || ''];
+      if (el.id) document.querySelectorAll(`label[for="${CSS.escape(el.id)}"]`).forEach((l) => own.push(l.textContent));
+      if (el.closest('label')) own.push(el.closest('label').textContent);
+      (el.getAttribute('aria-labelledby') || '').split(/\s+/).forEach((id) => { const n = id && document.getElementById(id); if (n) own.push(n.textContent); });
+      let kind = which(own.join(' '));
+      for (let a = el.parentElement, i = 0; !kind && a && i < 4; a = a.parentElement, i++) {
+        const t = a.textContent || '';
+        if (kinds.first.test(t) && kinds.last.test(t)) break; // container holds both: ambiguous
+        kind = which(t);
+      }
+      if (kind && !marked[kind]) { el.setAttribute('data-kax-field', kind); marked[kind] = true; }
+    });
+    return marked;
+  });
+}
+
 /** Labels (never values) of visible required controls that are still empty or unticked. */
 async function emptyRequiredFields(page) {
   return page.evaluate(() => {
@@ -280,6 +312,8 @@ export async function runOnboarding({ context, email, password, birthYear, first
   let lastIdentity = '';
   let provenAt = 0;
   let emptyFields = [];
+  const retries = {};
+  const stepSeenAt = {};
   let frontRestored = false;
   const startedAt = Date.now();
 
@@ -296,8 +330,10 @@ export async function runOnboarding({ context, email, password, birthYear, first
           await choice.click();
         }
         // Name fields are found by attribute or by their visible label ("First name").
-        const first = page.locator(FIRST_SEL).or(page.getByLabel(/first name/i));
-        const last = page.locator(LAST_SEL).or(page.getByLabel(/last name/i));
+        const names = await markNameFields(page).catch(() => ({}));
+        stepSeenAt[stepKey] = stepSeenAt[stepKey] || Date.now();
+        const first = page.locator(FIRST_SEL).or(page.locator('[data-kax-field="first"]'));
+        const last = page.locator(LAST_SEL).or(page.locator('[data-kax-field="last"]'));
         const filled = (await fillVisibleEmpty(page, first, firstName)) + (await fillVisibleEmpty(page, last, lastName)) +
           (await fillVisibleEmpty(page, EMAIL_SEL, email)) + (await fillVisibleEmpty(page, PASSWORD_SEL, password));
         if (filled) print('Filled ' + filled + ' field' + (filled > 1 ? 's' : '') + ' on ' + new URL(page.url()).pathname + '.');
@@ -329,8 +365,13 @@ export async function runOnboarding({ context, email, password, birthYear, first
         // After sign-up Khan Academy may ask for a name on a profile page. Press its
         // button once, after the required name fields are filled.
         const profileBtn = page.getByRole('button', { name: PROFILE_RE }).first();
-        if (submitted && !hasPassword && !clicked.has(stepKey + '#profile') && await profileBtn.isVisible().catch(() => false) &&
-            await profileBtn.isEnabled().catch(() => false) && (await profileBtn.getAttribute('aria-disabled')) !== 'true') {
+        if (submitted && !hasPassword && !filled && !clicked.has(stepKey + '#profile') && stepKey === page.url().split('?')[0] &&
+            await profileBtn.isVisible().catch(() => false) &&
+            await profileBtn.isEnabled().catch(() => false) && (await profileBtn.getAttribute('aria-disabled')) !== 'true' &&
+            ((names.first && names.last) || Date.now() - stepSeenAt[stepKey] > 3000) &&
+            (await emptyRequiredFields(page).catch(() => ['?'])).length === 0) {
+          // Only on a pass that filled nothing new and found nothing required still empty,
+          // so a page that is still rendering its fields is never submitted half-done.
           clicked.add(stepKey + '#profile');
           baseline = await alertTexts(page);
           await profileBtn.click();
@@ -341,10 +382,22 @@ export async function runOnboarding({ context, email, password, birthYear, first
       if (submitted) {
         const fresh = (await alertTexts(page).catch(() => [])).filter((t) => !baseline.includes(t));
         if (fresh.length) {
-          kaError = fresh.join(' | ');
-          emptyFields = await emptyRequiredFields(page).catch(() => []);
+          const onSignupForm = await page.locator(PASSWORD_SEL).first().isVisible().catch(() => false);
+          const empty = await emptyRequiredFields(page).catch(() => []);
           if (failureScreenshot) await page.screenshot({ path: failureScreenshot, fullPage: true }).then(() => print('Saved a screenshot of the form to ' + failureScreenshot), () => {});
-          break;
+          if (onSignupForm) {
+            // The sign-up form itself was rejected: no account was created.
+            kaError = fresh.join(' | ');
+            emptyFields = empty;
+            break;
+          }
+          // A later step (e.g. the profile page) complained. The account already exists,
+          // so fill what's missing and try that step again (at most 3 times).
+          baseline = await alertTexts(page).catch(() => baseline);
+          const key = page.url().split('?')[0] + '#profile';
+          retries[key] = (retries[key] || 0) + 1;
+          print('Khan Academy said "' + fresh.join(' | ') + '" on ' + new URL(page.url()).pathname + (empty.length ? ' (empty: ' + empty.join(', ') + ')' : '') + (retries[key] <= 3 ? '; filling it in and retrying.' : '; finish this step in the browser window.'));
+          if (retries[key] <= 3) clicked.delete(key);
         }
       }
     }

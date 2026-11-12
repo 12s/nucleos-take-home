@@ -167,7 +167,8 @@ test('onboarding script: creates the account and proves it, never prints secrets
   assert.equal(fake.state.signupPosts, 1, 'one account, one submit');
   assert.equal(submits, 1, 'credentials are saved right after the one submit');
   assert.equal(fake.state.accounts['new@fixture.test'], 'Gen3rated-Secret!');
-  assert.deepEqual(fake.state.profile, { first: 'A', last: 'B', code: '' }, 'names filled by label, class code left empty');
+  assert.deepEqual(fake.state.profile, { first: 'A', last: 'B', code: '' }, 'names found by nearby label text, class code left empty');
+  assert.equal(fake.state.profileAttempts, 1, 'profile submitted once, after its late fields were filled');
   assert.doesNotMatch(lines.join('\n') + result.detail, /Gen3rated-Secret!|new@fixture\.test/);
 });
 
@@ -201,4 +202,21 @@ test('onboarding script: without --agree-terms it never ticks the terms box or s
   assert.equal(fake.state.signupPosts, 0, 'nothing submitted without consent');
   assert.equal(result.outcome, 'unverified');
   assert.ok(lines.some((l) => /agree to its terms/.test(l)), lines.join('\n'));
+});
+
+test('onboarding script: a complaint on the profile step is not "account not created"', async () => {
+  const fake = createFakeKA();
+  fake.state.failProfileOnce = true; // the profile page rejects the first submit
+  const browser = await chromium.launch();
+  cleanups.push(() => browser.close());
+  const context = await browser.newContext();
+  await fake.install(context);
+  const lines = [];
+  // Our own query is refused, like the live site, so proof must come from elsewhere.
+  const identityCheck = async () => ({ status: 'unverifiable', detail: 'profile request returned HTTP 403' });
+  const result = await runOnboarding({ context, email: 'p@fixture.test', password: 'Whatever-1!', birthYear: 2000, firstName: 'A', lastName: 'B', agreeTerms: true, timeoutMs: 8000, pollMs: 200, say: (m) => lines.push(m), identityCheck });
+  assert.notEqual(result.outcome, 'failed', 'past the sign-up form, the account exists: never "not created"');
+  assert.ok(lines.some((l) => /Something went wrong.*retrying/.test(l)), lines.join('\n'));
+  assert.deepEqual(fake.state.profile, { first: 'A', last: 'B', code: '' }, 'retried and completed the profile step');
+  assert.equal(fake.state.profileAttempts, 2);
 });

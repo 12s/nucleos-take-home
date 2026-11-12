@@ -8,7 +8,7 @@
  * mode 600) and are never printed.
  */
 import { chromium } from 'playwright';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, generatePassword, runOnboarding, maskIdentifier } from './lib.mjs';
@@ -80,7 +80,9 @@ async function main() {
     process.exit(0);
   }
   if (result.outcome === 'failed') {
-    if (savedThisRun) rmSync(ACCOUNT_FILE, { force: true }); // Khan Academy refused the sign-up
+    // Khan Academy rejected the sign-up form itself. Keep the credentials anyway (renamed),
+    // never delete them: a mistaken verdict must not lose the password to a real account.
+    if (savedThisRun) renameSync(ACCOUNT_FILE, ACCOUNT_FILE.replace(/\.json$/, '.rejected.' + new Date().toISOString().replace(/[:.]/g, '-') + '.json'));
     console.log(`\nACCOUNT NOT CREATED. Khan Academy said: "${result.detail}"`);
     if (result.emptyFields && result.emptyFields.length) console.log('Required fields that were still empty: ' + result.emptyFields.join(', '));
     process.exit(1);
