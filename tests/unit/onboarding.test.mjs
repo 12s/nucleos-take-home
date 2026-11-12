@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { generatePassword, parseArgs, decideOutcome, redact, checkIdentity } from '../../onboarding/lib.mjs';
+import { generatePassword, parseArgs, decideOutcome, redact, checkIdentity, watchProfileResponses } from '../../onboarding/lib.mjs';
 
 test('generatePassword: long, varied, random', () => {
   const a = generatePassword();
@@ -38,15 +38,36 @@ test('redact removes every occurrence of every secret', () => {
   assert.equal(redact('nothing', ['', null]), 'nothing');
 });
 
-test('checkIdentity uses the browser context cookie jar and the shared rule', async () => {
-  let posted;
-  const context = {
-    cookies: async () => [{ name: 'fkey', value: 'F1' }, { name: 'KAAS', value: 's' }],
-    request: { post: async (url, opts) => { posted = { url, opts }; return { ok: () => true, status: () => 200, json: async () => ({ data: { user: { kaid: 'k', email: 'a@b.co', isPhantom: false } } }) }; } },
+test('checkIdentity asks from a real www.khanacademy.org tab and applies the shared rule', async () => {
+  const visited = [];
+  let evaluated = 0;
+  const page = {
+    isClosed: () => false,
+    goto: async (u) => { visited.push(u); },
+    evaluate: async (_fn, arg) => { evaluated++; assert.match(arg.query, /isPhantom/); return { ok: true, status: 200, body: { data: { user: { kaid: 'k', email: 'a@b.co', isPhantom: false } } } }; },
   };
-  const r = await checkIdentity(context, 'a@b.co');
-  assert.equal(r.status, 'success');
-  assert.equal(posted.opts.headers['x-ka-fkey'], 'F1');
+  const context = { newPage: async () => page };
+  assert.equal((await checkIdentity(context, 'a@b.co')).status, 'success');
+  assert.equal((await checkIdentity(context, 'a@b.co')).status, 'success');
+  assert.deepEqual(visited, ['https://www.khanacademy.org/about'], 'one verifier tab, reused');
+  assert.equal(evaluated, 2);
+
+  const bad = { newPage: async () => ({ ...page, evaluate: async () => ({ ok: false, status: 403, body: null }) }) };
+  assert.equal((await checkIdentity(bad, 'a@b.co')).detail, 'profile request returned HTTP 403');
+});
+
+test("watchProfileResponses: Khan Academy's own getFullUserProfile responses count as proof", async () => {
+  const listeners = [];
+  const context = { on: (ev, fn) => { assert.equal(ev, 'response'); listeners.push(fn); } };
+  const best = watchProfileResponses(context, 'a@b.co');
+  const emit = (url, json) => Promise.all(listeners.map((fn) => fn({ url: () => url, json: async () => json })));
+  await emit('https://www.khanacademy.org/api/internal/graphql/otherQuery', { data: { user: { kaid: 'k', email: 'a@b.co', isPhantom: false } } });
+  assert.equal(best(), null, 'other queries are ignored');
+  await emit('https://www.khanacademy.org/api/internal/graphql/getFullUserProfile?hash=1', { data: { user: null } });
+  assert.equal(best(), null, 'not-signed-in is not remembered');
+  await emit('https://www.khanacademy.org/api/internal/graphql/getFullUserProfile?hash=1', { data: { user: { kaid: 'k9', email: 'A@b.co', isPhantom: false } } });
+  assert.equal(best().status, 'success');
+  assert.match(best().detail, /kaid k9.*own request/);
 });
 
 test('committed config.json is a deliberately wrong example, and real-credential files are git-ignored', () => {

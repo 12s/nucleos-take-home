@@ -146,6 +146,26 @@ async function markUncheckedTerms(page) {
   });
 }
 
+/** Labels (never values) of visible required controls that are still empty or unticked. */
+async function emptyRequiredFields(page) {
+  return page.evaluate(() => {
+    const out = [];
+    document.querySelectorAll('input, select, textarea, [role="checkbox"]').forEach((el) => {
+      const required = el.required || el.getAttribute('aria-required') === 'true' || el.getAttribute('aria-invalid') === 'true';
+      if (!required) return;
+      const isBox = el.type === 'checkbox' || el.getAttribute('role') === 'checkbox';
+      const empty = isBox ? !(el.checked || el.getAttribute('aria-checked') === 'true') : !el.value;
+      const shown = el.getClientRects().length || (el.parentElement && el.parentElement.getClientRects().length);
+      if (!empty || !shown) return;
+      const byFor = el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const byIds = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean)[0];
+      const label = (byFor || el.closest('label') || byIds || {}).textContent || el.getAttribute('aria-label') || el.placeholder || el.name || el.type || el.tagName;
+      out.push(label.replace(/\s+/g, ' ').replace(/\brequired\b/gi, '').trim().slice(0, 60) + (isBox ? ' (checkbox)' : ''));
+    });
+    return out;
+  });
+}
+
 async function tickMarkedTerms(page) {
   for (const box of await page.locator('[data-kax-terms]').all()) {
     try { await box.check({ timeout: 3000 }); } catch { await box.check({ force: true }); }
@@ -165,28 +185,57 @@ async function pickFromCombobox(page, testId, name) {
   await opt.click(); // Playwright scrolls long lists (years) into view first
 }
 
+export const VERIFY_PAGE_URL = 'https://www.khanacademy.org/about';
+
 /**
- * Ask Khan Academy who this browser context is signed in as. Uses the context's
- * own cookie jar (context.request shares it) and the extension's fetchIdentity,
- * so the script and the extension apply the identical rule.
+ * Ask Khan Academy who this browser context is signed in as, from inside a real
+ * www.khanacademy.org tab: same origin, same cookies, same request the extension
+ * makes. The verdict comes from the extension's shared evaluateIdentity rule.
  */
 export async function checkIdentity(context, email) {
-  const cookies = await context.cookies(KAX.PROFILE_URL);
-  const cookieString = cookies.map((c) => c.name + '=' + c.value).join('; ');
-  const fetchImpl = async (url, init) => {
-    const r = await context.request.post(url, { headers: init.headers, data: init.body, failOnStatusCode: false });
-    return { ok: r.ok(), status: r.status(), json: () => r.json() };
-  };
-  return KAX.fetchIdentity(fetchImpl, cookieString, email);
+  let vp = context.__kaxVerifier;
+  if (!vp || vp.isClosed()) {
+    vp = await context.newPage();
+    await vp.goto(VERIFY_PAGE_URL, { waitUntil: 'domcontentloaded' });
+    context.__kaxVerifier = vp;
+  }
+  const res = await vp.evaluate(async ({ url, query }) => {
+    const m = /(?:^|;\s*)fkey=([^;]+)/.exec(document.cookie);
+    const headers = { 'content-type': 'application/json' };
+    if (m) headers['x-ka-fkey'] = decodeURIComponent(m[1]);
+    const r = await fetch(url, { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ operationName: 'getFullUserProfile', query, variables: {} }) });
+    let body = null;
+    try { body = await r.json(); } catch { /* not JSON */ }
+    return { ok: r.ok, status: r.status, body };
+  }, { url: KAX.PROFILE_URL, query: KAX.PROFILE_QUERY });
+  return KAX.fetchIdentity(async () => ({ ok: res.ok, status: res.status, json: async () => { if (res.body === null) throw new Error('not JSON'); return res.body; } }), '', email);
+}
+
+/**
+ * Passive proof: Khan Academy's own web app calls getFullUserProfile on its pages.
+ * Watch those responses and apply the same rule. Returns a getter for the best
+ * verdict seen so far ('success' wins, then 'mismatch').
+ */
+export function watchProfileResponses(context, email) {
+  let best = null;
+  context.on('response', async (r) => {
+    if (!/\/api\/internal\/graphql\/getFullUserProfile\b/.test(r.url())) return;
+    let json;
+    try { json = await r.json(); } catch { return; }
+    const v = KAX.evaluateIdentity(json, email);
+    if (v.status === 'success' || (v.status === 'mismatch' && (!best || best.status !== 'success'))) best = { ...v, detail: v.detail + ' (seen in Khan Academy\'s own request)' };
+  });
+  return () => best;
 }
 
 /**
  * Drive the sign-up flow. Returns { outcome: 'created'|'failed'|'unverified', detail, kaid? }.
  * `say` receives progress lines; it is never given the password or the full email.
  */
-export async function runOnboarding({ context, email, password, birthYear, firstName, lastName, timeoutMs, agreeTerms = false, say = () => {}, pollMs = 1000, identityCheck = checkIdentity }) {
+export async function runOnboarding({ context, email, password, birthYear, firstName, lastName, timeoutMs, agreeTerms = false, onSubmitted = () => {}, failureScreenshot = null, say = () => {}, pollMs = 1000, identityCheck = checkIdentity }) {
   const secrets = [email, password];
   const print = (m) => say(redact(m, secrets));
+  const seenIdentity = watchProfileResponses(context, email);
   const page = await context.newPage();
   const deadline = Date.now() + timeoutMs;
 
@@ -224,6 +273,8 @@ export async function runOnboarding({ context, email, password, birthYear, first
   let announcedTerms = false;
   let lastIdentity = '';
   let provenAt = 0;
+  let emptyFields = [];
+  let frontRestored = false;
   const startedAt = Date.now();
 
   while (Date.now() < deadline) {
@@ -243,7 +294,7 @@ export async function runOnboarding({ context, email, password, birthYear, first
         const last = page.locator(LAST_SEL).or(page.getByLabel(/last name/i));
         const filled = (await fillVisibleEmpty(page, first, firstName)) + (await fillVisibleEmpty(page, last, lastName)) +
           (await fillVisibleEmpty(page, EMAIL_SEL, email)) + (await fillVisibleEmpty(page, PASSWORD_SEL, password));
-        if (filled) print('Filled the sign-up form.');
+        if (filled) print('Filled ' + filled + ' field' + (filled > 1 ? 's' : '') + ' on ' + new URL(page.url()).pathname + '.');
 
         // Agreeing to Khan Academy's terms is the user's decision: only tick the box
         // when they passed --agree-terms; otherwise wait for them to tick it.
@@ -265,6 +316,7 @@ export async function runOnboarding({ context, email, password, birthYear, first
           baseline = await alertTexts(page);
           await btn.click();
           submitted = true;
+          onSubmitted();
           print('Submitted the sign-up form. Waiting for Khan Academy to confirm…');
         }
 
@@ -282,13 +334,23 @@ export async function runOnboarding({ context, email, password, birthYear, first
 
       if (submitted) {
         const fresh = (await alertTexts(page).catch(() => [])).filter((t) => !baseline.includes(t));
-        if (fresh.length) { kaError = fresh.join(' | '); break; }
+        if (fresh.length) {
+          kaError = fresh.join(' | ');
+          emptyFields = await emptyRequiredFields(page).catch(() => []);
+          if (failureScreenshot) await page.screenshot({ path: failureScreenshot, fullPage: true }).then(() => print('Saved a screenshot of the form to ' + failureScreenshot), () => {});
+          break;
+        }
       }
     }
 
     // Proof, not a URL guess: does Khan Academy say this browser is signed in as `email`?
-    if (submitted || Date.now() - startedAt > 15000) {
-      identity = await identityCheck(context, email).catch((e) => ({ status: 'unverifiable', detail: String(e.message) }));
+    // The active check opens a second tab, so wait until our own submit (or a minute,
+    // for a step the user finishes by hand) to avoid stealing focus mid-form.
+    if (submitted || Date.now() - startedAt > 60000) {
+      identity = await identityCheck(context, email).catch((e) => ({ status: 'unverifiable', detail: String(e.message).split('\n')[0] }));
+      if (!frontRestored && !page.isClosed()) { await page.bringToFront().catch(() => {}); frontRestored = true; } // the check opened a tab
+      const seen = seenIdentity();
+      if (seen && identity.status !== 'success' && (seen.status === 'success' || identity.status !== 'mismatch')) identity = seen;
       const summary = identity.status + ': ' + identity.detail;
       if (summary !== lastIdentity) { print('Khan Academy identity check → ' + summary); lastIdentity = summary; }
       if (identity.status === 'mismatch') break;
@@ -315,9 +377,10 @@ export async function runOnboarding({ context, email, password, birthYear, first
   }
 
   // An error on screen does not prove the account is missing; check once more.
+  if (seenIdentity() && seenIdentity().status === 'success') identity = seenIdentity();
   if (!identity || (identity.status !== 'success' && identity.status !== 'mismatch')) {
     identity = await identityCheck(context, email).catch((e) => ({ status: 'unverifiable', detail: String(e.message) }));
   }
   const result = decideOutcome({ identity, kaError, timedOut: !kaError && Date.now() >= deadline });
-  return { ...result, detail: redact(result.detail, secrets), kaid: identity && identity.kaid };
+  return { ...result, detail: redact(result.detail, secrets), kaid: identity && identity.kaid, emptyFields: emptyFields.map((f) => redact(f, secrets)) };
 }

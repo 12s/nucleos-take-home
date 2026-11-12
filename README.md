@@ -40,7 +40,7 @@ What it does: it opens Chromium in a visible window, then goes **Sign up → Stu
 
 Exit codes: `0` = account created and verified, `1` = Khan Academy showed an error (printed word for word), `2` = not confirmed (it won't claim success).
 
-The new credentials are written **only** to `secrets/ka-account.json` (git-ignored, mode 600). They never go to stdout. Every progress line goes through `redact()`, which strips the email and password. The script also refuses to run a second time once an account has been verified, so it can't create a batch of accounts.
+The new credentials are written **only** to `secrets/ka-account.json` (git-ignored, mode 600). They're written the moment the sign-up form is submitted, marked `"verified": false`, and flipped to `true` once Khan Academy proves the account exists. Ctrl+C at any point leaves them on disk. A file from an earlier run is renamed to `ka-account.<time>.json` rather than overwritten, and the file is deleted again if Khan Academy rejects the sign-up. In that case the script also lists any required fields that were still empty (labels only) and saves a screenshot to `secrets/last-failure.png`. They never go to stdout. Every progress line goes through `redact()`, which strips the email and password. The script also refuses to run a second time once an account has been verified, so it can't create a batch of accounts.
 
 ### 2. Load the extension ("Load unpacked")
 
@@ -69,7 +69,8 @@ Logs: every attempt is logged with `console.log` in the page and in the service 
 
 The script never decides from a URL change or a "welcome" screen. It decides from Khan Academy's own answer to "who is signed in in this browser?":
 
-- `POST https://www.khanacademy.org/api/internal/graphql/getFullUserProfile` with `query getFullUserProfile { user { id kaid email username isPhantom } }`. This is the same operation, cut down to the fields I need, that the khanacademy.org web app ships in its JavaScript bundle. The request goes through the browser context's cookie jar (`context.request`), so it uses exactly the session the sign-up just created.
+- `POST https://www.khanacademy.org/api/internal/graphql/getFullUserProfile` with `query getFullUserProfile { user { id kaid email username isPhantom } }`. This is the same operation, cut down to the fields I need, that the khanacademy.org web app ships in its JavaScript bundle. The script sends it from inside a www.khanacademy.org tab in the same browser, so it's a same-origin request that carries exactly the session the sign-up just created. It's the same request the extension makes.
+- The script also watches the `getFullUserProfile` responses that Khan Academy's own pages request, and applies the same rule to them. That way the proof doesn't depend on Khan Academy accepting our query text.
 - The result counts as **created** only if Khan Academy returns a user that has a `kaid` and `isPhantom === false` (phantom users are KA's anonymous visitors), and whose `email` (or `username`) equals the email we signed up with.
 - Getting no user, a phantom user, a different user, or a response that isn't shaped as expected (an error, HTTP failure, missing fields) means **not confirmed**, and the script exits 2. An error shown in a sign-up alert means **failed**, exit 1. Even then, the script checks the API once more first, because an alert doesn't prove the account is missing.
 

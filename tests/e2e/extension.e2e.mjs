@@ -130,16 +130,18 @@ test('onboarding script: creates the account and proves it, never prints secrets
   const context = await browser.newContext();
   await fake.install(context);
   const lines = [];
+  let submits = 0;
   // context.request bypasses page routes, so answer the identity check from the fixture directly
   // through the same fetchIdentity rule the real script uses.
   const identityCheck = (_ctx, email) => KAX.fetchIdentity(async (url, init) => {
     const r = fake.handle(init.method, url, init.body);
     return { ok: r.status === 200, status: r.status, json: async () => JSON.parse(r.body) };
   }, '', email);
-  const result = await runOnboarding({ context, email: 'new@fixture.test', password: 'Gen3rated-Secret!', birthYear: 2000, firstName: 'A', lastName: 'B', agreeTerms: true, timeoutMs: 30000, pollMs: 200, say: (m) => lines.push(m), identityCheck });
+  const result = await runOnboarding({ context, email: 'new@fixture.test', password: 'Gen3rated-Secret!', birthYear: 2000, firstName: 'A', lastName: 'B', agreeTerms: true, timeoutMs: 30000, pollMs: 200, say: (m) => lines.push(m), identityCheck, onSubmitted: () => submits++ });
   assert.equal(result.outcome, 'created', result.detail);
   assert.equal(result.kaid, 'kaid_fixture123');
   assert.equal(fake.state.signupPosts, 1, 'one account, one submit');
+  assert.equal(submits, 1, 'credentials are saved right after the one submit');
   assert.equal(fake.state.accounts['new@fixture.test'], 'Gen3rated-Secret!');
   assert.deepEqual(fake.state.profile, { first: 'A', last: 'B', code: '' }, 'names filled by label, class code left empty');
   assert.doesNotMatch(lines.join('\n') + result.detail, /Gen3rated-Secret!|new@fixture\.test/);
