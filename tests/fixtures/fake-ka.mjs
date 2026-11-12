@@ -46,6 +46,22 @@ const LOGIN_PAGE = page('Log in to Khan Academy | Khan Academy', `
   });
 </script>`);
 
+// Like the live page: labels only (no name/autocomplete attributes), an optional
+// class code, and a button that finishes the profile.
+const PROFILE_PAGE = page('Welcome', `
+<h1>Welcome to Khan Academy for learners!</h1>
+<label for=":r1:">First name <span>required</span></label><input id=":r1:">
+<label for=":r2:">Last name <span>required</span></label><input id=":r2:">
+<label for=":r3:">Have a class code? Join here! (Optional)</label><input id=":r3:" placeholder="Eg. G09WP">
+<button type="button" id="enter">Enter Khan Academy for learners</button>
+<script>
+  document.getElementById('enter').onclick = async () => {
+    const body = { first: document.getElementById(':r1:').value, last: document.getElementById(':r2:').value, code: document.getElementById(':r3:').value };
+    const j = await (await fetch('/fixture/profile', { method: 'POST', body: JSON.stringify(body) })).json();
+    if (j.ok) location.href = 'https://www.khanacademy.org/';
+  };
+</script>`);
+
 const HOME_PAGE = page('Khan Academy', '<main><h1>Fixture home</h1></main>');
 
 const SIGNUP_PAGE = page('Sign up', `<a href="/signup/learner/birthday">Student Student learning on my own</a> <a href="/signup/parent">Family</a>`);
@@ -72,7 +88,6 @@ const BIRTHDAY_PAGE = page('Sign up', `
 const EMAIL_PAGE = page('Sign up', `
 <div id="signup-error" role="alert"></div>
 <form id="f">
-  <input name="firstName" autocomplete="given-name"><input name="lastName" autocomplete="family-name">
   <input type="email" name="email"><input type="password" name="password">
   <!-- Visually hidden native input with a styled box, like Wonder Blocks. -->
   <div class="terms"><input type="checkbox" id="tos" name="tos" style="position:absolute;opacity:0;width:1px;height:1px">
@@ -84,7 +99,7 @@ const EMAIL_PAGE = page('Sign up', `
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
     const j = await (await fetch('/fixture/signup', { method: 'POST', body: JSON.stringify(fd) })).json();
-    if (j.ok) location.href = 'https://www.khanacademy.org/';
+    if (j.ok) location.href = 'https://www.khanacademy.org/signup/learner/profile';
     else document.getElementById('signup-error').textContent = j.error;
   });
 </script>`);
@@ -95,6 +110,7 @@ export function createFakeKA({ accounts = {} } = {}) {
     session: null,                   // email of the signed-in user, or null
     loginPosts: 0,
     signupPosts: 0,
+    profile: null,                   // { first, last, code } once the profile step is done
     profileResponse: null,           // override getFullUserProfile JSON for a test
     bounceToLogin: false,            // simulate a submit that lands back on /login with no message
   };
@@ -125,8 +141,16 @@ export function createFakeKA({ accounts = {} } = {}) {
       if (state.accounts[email]) return json({ ok: false, error: FIXTURE_TAKEN_ERROR });
       state.accounts[email] = password;
       state.session = email;
+      state.profile = null;
       return json({ ok: true });
     }
+    if (u.pathname === '/fixture/profile' && method === 'POST') {
+      const p = JSON.parse(body || '{}');
+      if (!p.first || !p.last) return json({ ok: false });
+      state.profile = p;
+      return json({ ok: true });
+    }
+    if (u.pathname === '/signup/learner/profile') return html(PROFILE_PAGE);
     if (/^\/login\/?$/.test(u.pathname)) return html(LOGIN_PAGE);
     if (u.pathname === '/signup') return html(SIGNUP_PAGE);
     if (u.pathname === '/signup/learner/birthday') return html(BIRTHDAY_PAGE);

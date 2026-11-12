@@ -141,6 +141,7 @@ test('onboarding script: creates the account and proves it, never prints secrets
   assert.equal(result.kaid, 'kaid_fixture123');
   assert.equal(fake.state.signupPosts, 1, 'one account, one submit');
   assert.equal(fake.state.accounts['new@fixture.test'], 'Gen3rated-Secret!');
+  assert.deepEqual(fake.state.profile, { first: 'A', last: 'B', code: '' }, 'names filled by label, class code left empty');
   assert.doesNotMatch(lines.join('\n') + result.detail, /Gen3rated-Secret!|new@fixture\.test/);
 });
 

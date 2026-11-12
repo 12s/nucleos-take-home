@@ -78,12 +78,15 @@ const PASSWORD_SEL = 'input[type="password"]';
 const FIRST_SEL = 'input[autocomplete="given-name"], input[name*="first" i]';
 const LAST_SEL = 'input[autocomplete="family-name"], input[name*="last" i]';
 const SUBMIT_RE = /^(sign up|create account|create my account|continue|next|submit)$/i;
+// The profile step after sign-up ("Enter Khan Academy for learners").
+const PROFILE_RE = /^(enter khan academy\b.*|get started|finish|done|let's go)$/i;
 const EMAIL_PATH_RE = /(sign up|continue) with email/i;
 const CAPTCHA_SEL = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="challenges.cloudflare.com"], iframe[src*="arkoselabs"], iframe[title*="captcha" i]';
 
 async function fillVisibleEmpty(page, selector, value) {
   let n = 0;
-  for (const el of await page.locator(selector).all()) {
+  const loc = typeof selector === 'string' ? page.locator(selector) : selector;
+  for (const el of await loc.all()) {
     if (await el.isVisible().catch(() => false) && (await el.inputValue().catch(() => 'x')) === '') {
       await el.fill(value);
       n++;
@@ -219,6 +222,8 @@ export async function runOnboarding({ context, email, password, birthYear, first
   let announcedCaptcha = false;
   let announcedManual = false;
   let announcedTerms = false;
+  let lastIdentity = '';
+  let provenAt = 0;
   const startedAt = Date.now();
 
   while (Date.now() < deadline) {
@@ -233,7 +238,10 @@ export async function runOnboarding({ context, email, password, birthYear, first
           clicked.add(stepKey + '#email-path');
           await choice.click();
         }
-        const filled = (await fillVisibleEmpty(page, FIRST_SEL, firstName)) + (await fillVisibleEmpty(page, LAST_SEL, lastName)) +
+        // Name fields are found by attribute or by their visible label ("First name").
+        const first = page.locator(FIRST_SEL).or(page.getByLabel(/first name/i));
+        const last = page.locator(LAST_SEL).or(page.getByLabel(/last name/i));
+        const filled = (await fillVisibleEmpty(page, first, firstName)) + (await fillVisibleEmpty(page, last, lastName)) +
           (await fillVisibleEmpty(page, EMAIL_SEL, email)) + (await fillVisibleEmpty(page, PASSWORD_SEL, password));
         if (filled) print('Filled the sign-up form.');
 
@@ -259,6 +267,17 @@ export async function runOnboarding({ context, email, password, birthYear, first
           submitted = true;
           print('Submitted the sign-up form. Waiting for Khan Academy to confirm…');
         }
+
+        // After sign-up Khan Academy may ask for a name on a profile page. Press its
+        // button once, after the required name fields are filled.
+        const profileBtn = page.getByRole('button', { name: PROFILE_RE }).first();
+        if (submitted && !hasPassword && !clicked.has(stepKey + '#profile') && await profileBtn.isVisible().catch(() => false) &&
+            await profileBtn.isEnabled().catch(() => false) && (await profileBtn.getAttribute('aria-disabled')) !== 'true') {
+          clicked.add(stepKey + '#profile');
+          baseline = await alertTexts(page);
+          await profileBtn.click();
+          print('Filled in the profile step (name) and continued.');
+        }
       }
 
       if (submitted) {
@@ -270,7 +289,22 @@ export async function runOnboarding({ context, email, password, birthYear, first
     // Proof, not a URL guess: does Khan Academy say this browser is signed in as `email`?
     if (submitted || Date.now() - startedAt > 15000) {
       identity = await identityCheck(context, email).catch((e) => ({ status: 'unverifiable', detail: String(e.message) }));
-      if (identity.status === 'success' || identity.status === 'mismatch') break;
+      const summary = identity.status + ': ' + identity.detail;
+      if (summary !== lastIdentity) { print('Khan Academy identity check → ' + summary); lastIdentity = summary; }
+      if (identity.status === 'mismatch') break;
+      if (identity.status === 'success') {
+        // Proven. Finish a pending profile step first so the account is fully set up,
+        // but give it at most 20 s once the account is confirmed.
+        const profileDone = [...clicked].some((k) => k.endsWith('#profile'));
+        if (profileDone) break;
+        if (!provenAt) {
+          provenAt = Date.now();
+          // The page may still be loading the profile step; give it a moment to appear.
+          const onProfile = !page.isClosed() && await page.getByRole('button', { name: PROFILE_RE }).first()
+            .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
+          if (!onProfile) break;
+        } else if (Date.now() - provenAt > 20000) break;
+      }
     }
 
     if (!announcedManual && Date.now() - startedAt > 30000) {
