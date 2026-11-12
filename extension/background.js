@@ -91,7 +91,8 @@ const handlers = {
   /** A khanacademy.org page loaded. Only acts if this tab just submitted the form. */
   async landingPageLoaded(msg, tabId) {
     const s = await getTab(tabId);
-    if (!s || s.phase !== 'submitted') return { verify: false };
+    // 'verifying' too: if Khan Academy redirects again mid-check, the next page carries on.
+    if (!s || (s.phase !== 'submitted' && s.phase !== 'verifying')) return { verify: false };
     if (Date.now() - s.at > PENDING_TTL_MS) { await clearTab(tabId); return { verify: false }; }
     await setTab(tabId, { ...s, phase: 'verifying' });
     return { verify: true, username: s.username };

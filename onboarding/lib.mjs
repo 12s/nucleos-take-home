@@ -198,6 +198,11 @@ export async function checkIdentity(context, email) {
     vp = await context.newPage();
     await vp.goto(VERIFY_PAGE_URL, { waitUntil: 'domcontentloaded' });
     context.__kaxVerifier = vp;
+    context.__kaxVerifierAt = Date.now();
+  } else if (Date.now() - (context.__kaxVerifierAt || 0) > 10000 && vp.reload) {
+    // Reloading makes Khan Academy's page query the signed-in user again (passive proof).
+    await vp.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    context.__kaxVerifierAt = Date.now();
   }
   const res = await vp.evaluate(async ({ url, query }) => {
     const m = /(?:^|;\s*)fkey=([^;]+)/.exec(document.cookie);
@@ -212,18 +217,19 @@ export async function checkIdentity(context, email) {
 }
 
 /**
- * Passive proof: Khan Academy's own web app calls getFullUserProfile on its pages.
- * Watch those responses and apply the same rule. Returns a getter for the best
- * verdict seen so far ('success' wins, then 'mismatch').
+ * Passive proof: Khan Academy's own pages query the signed-in user through
+ * safelisted GraphQL operations. Watch every GraphQL response in the context and
+ * apply the extension's findIdentityInGraphQL rule. Returns a getter for the
+ * proof, or null if none has been seen.
  */
 export function watchProfileResponses(context, email) {
   let best = null;
   context.on('response', async (r) => {
-    if (!/\/api\/internal\/graphql\/getFullUserProfile\b/.test(r.url())) return;
+    if (best || !/\/api\/internal\/graphql\//.test(r.url())) return;
     let json;
     try { json = await r.json(); } catch { return; }
-    const v = KAX.evaluateIdentity(json, email);
-    if (v.status === 'success' || (v.status === 'mismatch' && (!best || best.status !== 'success'))) best = { ...v, detail: v.detail + ' (seen in Khan Academy\'s own request)' };
+    const v = KAX.findIdentityInGraphQL(json, email);
+    if (v && !best) best = { ...v, detail: v.detail + ", from Khan Academy's own user query" };
   });
   return () => best;
 }

@@ -82,7 +82,11 @@ Same idea, split across a page navigation:
 
 1. On the login page (`login.js`), the extension waits for the form (`data-testid="identifier-field"`, `"password-field"`, `"log-in-submit-button"`). It fills the fields so React registers the change and waits until Khan Academy enables the button. Then it **tells the service worker "submitted" before clicking**, because a successful login navigates away and the script stops running.
 2. Before clicking, it records a baseline of the messages already on the page. After clicking, any **new** text in `role="alert"`, `aria-live="assertive"`, or the description of a field Khan Academy marks `aria-invalid="true"` is Khan Academy's error. That text goes into the toast word for word through `textContent`, never as HTML. The cookie banner's alert regions are ignored.
-3. If the page navigates to www.khanacademy.org, `landing.js` asks the service worker whether this tab submitted in the last 60 s. If it did, `landing.js` calls the same `getFullUserProfile` check from the page, a same-origin request that uses Khan Academy's own session cookie. **Success** means a non-phantom user whose email or username matches the configured one. Anything else shows an amber "not confirmed" toast with the reason.
+3. If the page navigates to www.khanacademy.org, `landing.js` asks the service worker whether this tab submitted in the last 60 s. If it did, it looks for proof from Khan Academy itself, in two ways:
+   - **Khan Academy's own user queries (the proof that works on the live site).** On www.khanacademy.org, `page-hook.js` runs in the page's own JavaScript world from `document_start` and passes each GraphQL response Khan Academy's app receives to `landing.js`, without changing anything. `findIdentityInGraphQL` looks in those responses for a user object (`kaid` plus `isPhantom`) whose email or username matches the configured one.
+   - **Our own `getFullUserProfile` request.** It's same-origin with the session cookie. On the live site Khan Academy refuses it with **HTTP 403**, because it only accepts its own safelisted queries. That's why the first method exists. Where it works, it's accepted too.
+
+   **Success** means one of them returned a non-phantom user matching the configured account within 15 s. A user who isn't you (a page can show other people) or no answer at all ends in an amber "not confirmed" toast that gives the reason, including our own check's result.
 4. If there's no error and no navigation within 20 s, the extension says so. It doesn't guess.
 
 ## Main design decisions
@@ -102,7 +106,7 @@ Same idea, split across a page navigation:
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `storage`                                                                                         | `chrome.storage.session` keeps the per-tab attempt state across the login → www.khanacademy.org navigation. `chrome.storage.local` keeps the attempt log.                            |
 | content script on `https://accounts.khanacademy.org/login*`, `https://www.khanacademy.org/login*` | The login page, the only page where the extension acts. (`www…/login` redirects to `accounts…/login`. Both are listed so the script runs whichever one serves the form.)             |
-| content script on `https://www.khanacademy.org/*` (except `/login*`)                              | Where Khan Academy lands you after login, and the only origin where the identity check is same-origin. It returns immediately unless this tab submitted the form in the last minute. |
+| content scripts on `https://www.khanacademy.org/*` (except `/login*`): `landing.js`, and `page-hook.js` in the page's MAIN world | Where Khan Academy lands you after login. `page-hook.js` only reads the responses Khan Academy's own GraphQL requests receive and passes them to `landing.js` with `postMessage`. It never changes a request or sends data anywhere. `landing.js` ignores those messages unless this tab submitted the form in the last minute. A MAIN-world content script needs no extra permission (Chrome 111+). |
 
 Not requested: `host_permissions`, `tabs`, `scripting`, `cookies`, `webRequest`, `activeTab`, `web_accessible_resources`. Every network request the extension makes is a same-origin request from a Khan Academy page.
 
@@ -129,7 +133,8 @@ What's covered, in the order it matters:
 
 ## Known limitations
 
-- **`getFullUserProfile` is an internal Khan Academy API.** It's what the web app uses, but it isn't documented or promised. If Khan Academy starts rejecting query text it hasn't safelisted, or renames the fields, both pieces report **not confirmed** rather than a false success. The fix would be to add a second verifier, such as reading the signed-in user from the app's own rendered header.
+- **Proof depends on Khan Academy's internal GraphQL.** On the live site, our own `getFullUserProfile` query gets HTTP 403, so sign-in is proven from the user object in Khan Academy's own query responses. If Khan Academy stops returning `kaid`/`isPhantom` with the user's email or username, both pieces report **not confirmed** rather than a false success.
+- **`postMessage` from the page hook can be spoofed by other scripts on khanacademy.org.** Those are scripts Khan Academy itself chose to load, so that's an acceptable trust boundary here. A hardened version would check the service worker's own view instead, e.g. with `chrome.cookies` plus a server call it makes itself.
 - **The steps after the birthday picker weren't observable without submitting a real sign-up**, so the script finds those fields generically (email/password/name inputs, a "Sign up / Continue" button). If Khan Academy's flow changes, the script waits and tells you to finish the step by hand. Proof still decides the result.
 - **The error-text detection assumes** Khan Academy announces login errors the accessible way (an alert/live region, or `aria-invalid` plus a description). If it ever shows an error only as plain styled text, the extension waits 20 s and reports "not confirmed" instead of the text.
 - **The success check runs only on www.khanacademy.org.** If Khan Academy ever lands a fresh login on another host, the attempt expires after 60 s with no toast.
@@ -152,7 +157,7 @@ What's covered, in the order it matters:
 ## Layout
 
 ```
-extension/   manifest.json, background.js (service worker), login.js, landing.js, toast.js, shared.js, config.json
+extension/   manifest.json, background.js (service worker), login.js, landing.js, page-hook.js, toast.js, shared.js, config.json
 onboarding/  onboard.mjs (CLI), lib.mjs (flow + verdict), use-account.mjs
 tests/       unit/ (node:test + jsdom), e2e/ (Playwright + unpacked extension), fixtures/fake-ka.mjs
 ```

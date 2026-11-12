@@ -62,7 +62,16 @@ const PROFILE_PAGE = page('Welcome', `
   };
 </script>`);
 
-const HOME_PAGE = page('Khan Academy', '<main><h1>Fixture home</h1></main>');
+// Like the real app, the home page asks for the signed-in user with its own
+// (safelisted, GET + hash) query shortly after loading. Half via fetch, half via XHR.
+const HOME_PAGE = page('Khan Academy', `<main><h1>Fixture home</h1></main>
+<script>
+  setTimeout(() => {
+    const url = '/api/internal/graphql/getFullUserProfile?hash=1234567&variables=%7B%7D';
+    if (Math.random() < 0.5) fetch(url).then((r) => r.json());
+    else { const x = new XMLHttpRequest(); x.open('GET', url); x.send(); }
+  }, 400);
+</script>`);
 
 const SIGNUP_PAGE = page('Sign up', `<a href="/signup/learner/birthday">Student Student learning on my own</a> <a href="/signup/parent">Family</a>`);
 
@@ -111,6 +120,7 @@ export function createFakeKA({ accounts = {} } = {}) {
     loginPosts: 0,
     signupPosts: 0,
     profile: null,                   // { first, last, code } once the profile step is done
+    forbidAdHocQuery: false,         // answer our own POSTed query with 403, like the live site
     profileResponse: null,           // override getFullUserProfile JSON for a test
     bounceToLogin: false,            // simulate a submit that lands back on /login with no message
   };
@@ -126,7 +136,13 @@ export function createFakeKA({ accounts = {} } = {}) {
     const u = new URL(url);
     const json = (obj, status = 200) => ({ status, contentType: 'application/json', body: JSON.stringify(obj) });
     const html = (s) => ({ status: 200, contentType: 'text/html', body: s });
-    if (u.pathname === '/api/internal/graphql/getFullUserProfile' && method === 'POST') return json(profileJson());
+    if (u.pathname === '/api/internal/graphql/getFullUserProfile' && method === 'POST') {
+      return state.forbidAdHocQuery ? { status: 403, contentType: 'text/plain', body: 'Forbidden' } : json(profileJson());
+    }
+    if (u.pathname === '/api/internal/graphql/getFullUserProfile' && method === 'GET') {
+      const user = profileJson().data && profileJson().data.user;
+      return json({ data: { user: user && { ...user, __typename: 'User' } } });
+    }
     if (u.pathname === '/fixture/login' && method === 'POST') {
       state.loginPosts++;
       if (state.bounceToLogin) return json({ ok: true, redirect: 'https://accounts.khanacademy.org/login' });

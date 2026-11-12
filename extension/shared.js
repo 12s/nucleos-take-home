@@ -18,6 +18,8 @@
 
   // How long we wait on the login page for Khan Academy to react to a submit.
   const RESULT_TIMEOUT_MS = 20000;
+  // How long the landing page listens for Khan Academy's own user queries.
+  const PASSIVE_WAIT_MS = 15000;
   // How long a "submitted" attempt stays eligible for verification on the next page.
   const PENDING_TTL_MS = 60000;
 
@@ -121,6 +123,28 @@
     return { status: 'mismatch', detail: 'signed in, but as a different account (kaid ' + user.kaid + ')', kaid: user.kaid };
   }
 
+  /**
+   * Khan Academy's own pages query the signed-in user through safelisted GraphQL
+   * operations (our ad-hoc query can be refused with HTTP 403). Look through any
+   * GraphQL response for user objects (a kaid plus isPhantom) and apply
+   * evaluateIdentity to each. Only a success is returned: a page can also show
+   * other people, so a non-matching user proves nothing either way.
+   */
+  function findIdentityInGraphQL(json, configuredUsername) {
+    const seen = new Set();
+    let found = null;
+    (function walk(node, depth) {
+      if (found || !node || typeof node !== 'object' || depth > 10 || seen.has(node)) return;
+      seen.add(node);
+      if (typeof node.kaid === 'string' && typeof node.isPhantom === 'boolean') {
+        const v = evaluateIdentity({ data: { user: node } }, configuredUsername);
+        if (v.status === 'success') { found = v; return; }
+      }
+      for (const k of Object.keys(node)) walk(node[k], depth + 1);
+    })(json, 0);
+    return found;
+  }
+
   /** Read Khan Academy's CSRF token ("fkey" cookie) if it is visible to scripts. */
   function readFkey(cookieString) {
     const m = /(?:^|;\s*)fkey=([^;]+)/.exec(cookieString || '');
@@ -162,9 +186,9 @@
   }
 
   const api = {
-    PROFILE_URL, PROFILE_QUERY, RESULT_TIMEOUT_MS, PENDING_TTL_MS,
+    PROFILE_URL, PROFILE_QUERY, RESULT_TIMEOUT_MS, PENDING_TTL_MS, PASSIVE_WAIT_MS,
     normalizeText, validateConfig, isLoginUrl, collectMessageTexts, newMessages,
-    evaluateIdentity, readFkey, fetchIdentity, maskIdentifier,
+    evaluateIdentity, findIdentityInGraphQL, readFkey, fetchIdentity, maskIdentifier,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KAX = api;

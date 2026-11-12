@@ -81,3 +81,15 @@ test('maskIdentifier never reveals the full identifier', () => {
   assert.equal(K.maskIdentifier('learner1'), 'l***');
   assert.equal(K.maskIdentifier(''), '(empty)');
 });
+
+test('findIdentityInGraphQL: finds the configured user anywhere in a response, ignores everyone else', () => {
+  const resp = { data: { classroom: { students: [{ kaid: 'o', isPhantom: false, email: 'other@x.com' }] }, viewer: { me: { kaid: 'k1', isPhantom: false, username: 'learner1', email: null } } } };
+  const v = K.findIdentityInGraphQL(resp, 'learner1');
+  assert.equal(v.status, 'success');
+  assert.equal(v.kaid, 'k1');
+  assert.equal(K.findIdentityInGraphQL(resp, 'nobody@x.com'), null);
+  assert.equal(K.findIdentityInGraphQL({ data: { user: { kaid: 'p', isPhantom: true, email: 'learner1' } } }, 'learner1'), null, 'phantom never counts');
+  assert.equal(K.findIdentityInGraphQL({ data: { user: { kaid: 'k', email: 'learner1' } } }, 'learner1'), null, 'needs isPhantom to be present');
+  const loop = { data: {} }; loop.data.self = loop;
+  assert.equal(K.findIdentityInGraphQL(loop, 'x'), null, 'cycles are safe');
+});

@@ -56,18 +56,20 @@ test('checkIdentity asks from a real www.khanacademy.org tab and applies the sha
   assert.equal((await checkIdentity(bad, 'a@b.co')).detail, 'profile request returned HTTP 403');
 });
 
-test("watchProfileResponses: Khan Academy's own getFullUserProfile responses count as proof", async () => {
+test("watchProfileResponses: Khan Academy's own GraphQL user objects count as proof", async () => {
   const listeners = [];
   const context = { on: (ev, fn) => { assert.equal(ev, 'response'); listeners.push(fn); } };
   const best = watchProfileResponses(context, 'a@b.co');
   const emit = (url, json) => Promise.all(listeners.map((fn) => fn({ url: () => url, json: async () => json })));
-  await emit('https://www.khanacademy.org/api/internal/graphql/otherQuery', { data: { user: { kaid: 'k', email: 'a@b.co', isPhantom: false } } });
-  assert.equal(best(), null, 'other queries are ignored');
+  await emit('https://www.khanacademy.org/some/page.json', { data: { user: { kaid: 'k', email: 'a@b.co', isPhantom: false } } });
+  assert.equal(best(), null, 'non-GraphQL responses are ignored');
+  await emit('https://www.khanacademy.org/api/internal/graphql/otherQuery', { data: { user: { kaid: 'x', email: 'other@b.co', isPhantom: false } } });
+  assert.equal(best(), null, 'another person on the page proves nothing');
   await emit('https://www.khanacademy.org/api/internal/graphql/getFullUserProfile?hash=1', { data: { user: null } });
   assert.equal(best(), null, 'not-signed-in is not remembered');
   await emit('https://www.khanacademy.org/api/internal/graphql/getFullUserProfile?hash=1', { data: { user: { kaid: 'k9', email: 'A@b.co', isPhantom: false } } });
   assert.equal(best().status, 'success');
-  assert.match(best().detail, /kaid k9.*own request/);
+  assert.match(best().detail, /kaid k9, from Khan Academy.s own user query/);
 });
 
 test('committed config.json is a deliberately wrong example, and real-credential files are git-ignored', () => {

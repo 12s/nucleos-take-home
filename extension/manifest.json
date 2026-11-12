@@ -3,7 +3,9 @@
   "name": "Khan Academy Auto Sign-in (Nucleos take-home)",
   "version": "1.0.0",
   "description": "Signs in to Khan Academy with configured credentials and reports the real outcome.",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -13,14 +15,40 @@
         "https://accounts.khanacademy.org/login*",
         "https://www.khanacademy.org/login*"
       ],
-      "js": ["shared.js", "toast.js", "login.js"],
+      "js": [
+        "shared.js",
+        "toast.js",
+        "login.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.khanacademy.org/*"],
-      "exclude_matches": ["https://www.khanacademy.org/login*"],
-      "js": ["shared.js", "toast.js", "landing.js"],
-      "run_at": "document_idle"
+      "matches": [
+        "https://www.khanacademy.org/*"
+      ],
+      "exclude_matches": [
+        "https://www.khanacademy.org/login*"
+      ],
+      "js": [
+        "page-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.khanacademy.org/*"
+      ],
+      "exclude_matches": [
+        "https://www.khanacademy.org/login*"
+      ],
+      "js": [
+        "shared.js",
+        "toast.js",
+        "landing.js"
+      ],
+      "run_at": "document_start"
     }
-  ]
+  ],
+  "minimum_chrome_version": "111"
 }

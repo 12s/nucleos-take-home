@@ -81,13 +81,37 @@ test('correct credentials (config.local.json): success toast only after Khan Aca
   assert.doesNotMatch(JSON.stringify(log), /Correct-Horse-9!|learner@fixture\.test/, 'no password or full email in the log');
 });
 
+test('our own query refused (HTTP 403, as on the live site): proven from Khan Academy\'s own user query', async () => {
+  const fake = createFakeKA({ accounts: { [ACCOUNT.email]: ACCOUNT.password } });
+  fake.state.forbidAdHocQuery = true;
+  const { page, readLog } = await launch({ fake, localConfig: { username: ACCOUNT.email, password: ACCOUNT.password } });
+  await page.goto('https://accounts.khanacademy.org/login');
+  await page.waitForURL('https://www.khanacademy.org/');
+  const t = await toast(page);
+  assert.equal(t.kind, 'success', t.message);
+  assert.match(t.message, /kaid_fixture123, from Khan Academy's own user query/);
+  assert.ok((await readLog()).some((l) => l.outcome === 'signed-in'));
+});
+
+test('our own query refused and not signed in: not confirmed, never success', async () => {
+  const fake = createFakeKA({ accounts: { [ACCOUNT.email]: ACCOUNT.password } });
+  fake.state.forbidAdHocQuery = true;
+  fake.state.profileResponse = { data: { user: null } };
+  const { page } = await launch({ fake, localConfig: { username: ACCOUNT.email, password: ACCOUNT.password } });
+  await page.goto('https://accounts.khanacademy.org/login');
+  await page.waitForURL('https://www.khanacademy.org/');
+  const t = await toast(page, KAX.PASSIVE_WAIT_MS + 10000);
+  assert.equal(t.kind, 'unknown');
+  assert.match(t.message, /no Khan Academy response identified the configured user.*HTTP 403/);
+});
+
 test('navigation away is not success: a phantom user is reported as not confirmed', async () => {
   const fake = createFakeKA({ accounts: { [ACCOUNT.email]: ACCOUNT.password } });
   fake.state.profileResponse = { data: { user: { id: 'p', kaid: 'kaid_phantom', email: null, username: null, isPhantom: true } } };
   const { page } = await launch({ fake, localConfig: { username: ACCOUNT.email, password: ACCOUNT.password } });
   await page.goto('https://accounts.khanacademy.org/login');
   await page.waitForURL('https://www.khanacademy.org/');
-  const t = await toast(page);
+  const t = await toast(page, KAX.PASSIVE_WAIT_MS + 10000);
   assert.equal(t.kind, 'unknown');
   assert.match(t.message, /not confirmed: .*phantom/);
 });
@@ -98,7 +122,7 @@ test('signed in as someone else is not success', async () => {
   const { page } = await launch({ fake, localConfig: { username: ACCOUNT.email, password: ACCOUNT.password } });
   await page.goto('https://accounts.khanacademy.org/login');
   await page.waitForURL('https://www.khanacademy.org/');
-  assert.equal((await toast(page)).kind, 'unknown');
+  assert.equal((await toast(page, KAX.PASSIVE_WAIT_MS + 10000)).kind, 'unknown');
 });
 
 test('bounced back to /login after submitting: reported, not retried (avoids lockouts)', async () => {
